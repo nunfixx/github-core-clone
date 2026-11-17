@@ -38,19 +38,15 @@ const AGENT = 'github-core-clone/1.0';
 
 const envToken = process.env.MAKEFUN_SHOP_TOKEN ?? '';
 
-function pathOf(req: IncomingMessage): string {
+/** Parse the request URL once: path and query come from the same URL object (the old code
+ *  constructed a new URL for each of them). On an unparsable URL the path is '/' and the query
+ *  is empty, as before. */
+function requestUrl(req: IncomingMessage): { path: string; query: URLSearchParams } {
   try {
-    return new URL(req.url ?? '/', 'http://entry').pathname;
+    const url = new URL(req.url ?? '/', 'http://entry');
+    return { path: url.pathname, query: url.searchParams };
   } catch {
-    return '/';
-  }
-}
-
-function queryOf(req: IncomingMessage): URLSearchParams {
-  try {
-    return new URL(req.url ?? '/', 'http://entry').searchParams;
-  } catch {
-    return new URLSearchParams();
+    return { path: '/', query: new URLSearchParams() };
   }
 }
 
@@ -1304,9 +1300,8 @@ export function createApp(): Server {
   return createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       try {
-        const path = pathOf(req);
+        const { path, query } = requestUrl(req);
         const method = req.method ?? 'GET';
-        const query = queryOf(req);
 
         // The env's boot check calls this twice: 200 {"ok":true}.
         if (method === 'GET' && path === '/healthz') {

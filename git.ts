@@ -392,10 +392,38 @@ export function readPack(pack: Buffer, resolveBase?: (oid: string) => GitObject 
   return { objects, deltaCount };
 }
 
-/** How many bytes a zlib stream starting at `offset` consumed. A deflate stream never expands past its
- *  input by more than stored-block overhead, so the search window is `expectedSize` + slack; the
- *  smallest prefix that inflates cleanly is the stream's true end (inflateSync ignores trailing bytes). */
+/** How many bytes a zlib stream starting at `offset` consumed. Fast path: one inflate with
+ *  `{ info: true }`; the engine reports exactly how many input bytes the stream consumed
+ *  (`bytesWritten`), verified against the expected output size, so no binary search and no
+ *  deliberately-thrown errors (each thrown inflate builds a full stack trace). Falls back to the
+ *  binary search below when the engine does not report a usable length, preserving the old
+ *  behaviour (including the corrupt-stream error) byte for byte. */
 function consumedDeflateLength(data: Buffer, offset: number, expectedSize: number): number {
+  try {
+    const result = zlibInflate(data.subarray(offset), { info: true }) as unknown as {
+      buffer: Buffer;
+      engine: { bytesWritten?: unknown };
+    };
+    const consumed = result.engine.bytesWritten;
+    if (
+      typeof consumed === 'number' &&
+      Number.isInteger(consumed) &&
+      consumed > 0 &&
+      consumed <= data.length - offset &&
+      result.buffer.length === expectedSize
+    ) {
+      return consumed;
+    }
+  } catch {
+    // Fall through to the binary search.
+  }
+  return consumedDeflateLengthSlow(data, offset, expectedSize);
+}
+
+/** The old binary search for a stream's end: the smallest prefix that inflates cleanly is the
+ *  stream's true end (inflateSync ignores trailing bytes). A deflate stream never expands past
+ *  its input by more than stored-block overhead, so the search window is `expectedSize` + slack. */
+function consumedDeflateLengthSlow(data: Buffer, offset: number, expectedSize: number): number {
   const high = Math.min(data.length, offset + expectedSize + Math.floor(expectedSize / 1000) + 32);
   let low = offset + 1;
   let end = high;
